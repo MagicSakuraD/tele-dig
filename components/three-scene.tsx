@@ -1,40 +1,13 @@
 "use client";
 
 import * as React from "react";
-import * as THREE from "three";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Grid } from "@react-three/drei";
-
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { Model } from "@/components/excavator";
 
 interface ThreeSceneProps {
   title?: string;
-}
-
-// 简单的立方体组件作为占位符
-function PlaceholderMesh() {
-  const meshRef = React.useRef<THREE.Mesh>(null);
-
-  // 简单的旋转动画
-  React.useEffect(() => {
-    const animate = () => {
-      if (meshRef.current) {
-        meshRef.current.rotation.x += 0.005;
-        meshRef.current.rotation.y += 0.01;
-      }
-      requestAnimationFrame(animate);
-    };
-    animate();
-  }, []);
-
-  return (
-    <mesh ref={meshRef} position={[0, 0.5, 0]}>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial color="#3b82f6" />
-    </mesh>
-  );
 }
 
 export function ThreeScene({ title = "3D姿态监控" }: ThreeSceneProps) {

@@ -1,8 +1,10 @@
 "use client";
 
 import * as React from "react";
+import { useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Video, VideoOff, Maximize2, RotateCcw } from "lucide-react";
+import { ArrowLeft, VideoOff, Maximize2, RotateCcw } from "lucide-react";
+import { Peer, DataConnection } from "peerjs";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,33 +25,80 @@ export default function RemoteControlPage() {
   const [signalStrength, setSignalStrength] = React.useState(85);
   const [packetLoss, setPacketLoss] = React.useState(0.1);
   const [latency, setLatency] = React.useState(45);
-  const [isConnected, setIsConnected] = React.useState(true);
+  const [connectionStatus, setConnectionStatus] = React.useState<
+    "disconnected" | "connecting" | "connected" | "error"
+  >("disconnected");
 
-  // 模拟信号强度变化
-  React.useEffect(() => {
-    const interval = setInterval(() => {
-      const newStrength = Math.max(
-        20,
-        Math.min(100, signalStrength + (Math.random() - 0.5) * 10)
-      );
-      setSignalStrength(newStrength);
+  const peerRef = useRef<Peer | null>(null);
+  const connRef = useRef<DataConnection | null>(null);
 
-      // 根据信号强度设置丢包率
-      if (newStrength > 80) setPacketLoss(0.1);
-      else if (newStrength > 60) setPacketLoss(1);
-      else if (newStrength > 40) setPacketLoss(5);
-      else setPacketLoss(15);
+  //建立peerjs webrtc连接
+  useEffect(() => {
+    if (!excavatorId) return;
 
-      // 模拟延迟变化
-      setLatency(
-        Math.round(
-          Math.max(20, Math.min(200, latency + (Math.random() - 0.5) * 20))
-        )
-      );
-    }, 2000);
+    // 1. 创建Peer实例
+    const peer = new Peer("operator" + excavatorId, {
+      host: "cyberc3-cloud-server.sjtu.edu.cn",
+      port: 443,
+      path: "/cyber",
+      secure: true,
+      debug: 2,
+      config: {
+        iceServers: [
+          { urls: "stun:111.186.56.118:3478" },
+          {
+            urls: "turn:111.186.56.118:3478",
+            username: "test",
+            credential: "123456",
+          },
+        ],
+      },
+    });
+    peerRef.current = peer;
 
-    return () => clearInterval(interval);
-  }, [signalStrength, latency]);
+    // 2. 监听与信令服务器的连接
+    peer.on("open", (id) => {
+      console.log("Operator PeerJS is open. My ID is:", id);
+      setConnectionStatus("connecting");
+
+      // 3. 连接到挖掘机Peer
+      const conn = peer.connect("excav" + excavatorId);
+      connRef.current = conn;
+
+      // 4. 监听数据连接事件
+      conn.on("open", () => {
+        console.log("Data connection established with excavator!");
+        setConnectionStatus("connected");
+        conn.send("Hello from operator!");
+      });
+
+      conn.on("data", (data) => {
+        console.log("Received data:", data);
+        // 在这里处理从挖掘机接收到的数据
+      });
+
+      conn.on("close", () => {
+        console.log("Connection closed.");
+        setConnectionStatus("disconnected");
+      });
+
+      conn.on("error", (err) => {
+        console.error("Connection error:", err);
+        setConnectionStatus("error");
+      });
+    });
+
+    peer.on("error", (err) => {
+      console.error("PeerJS error:", err);
+      setConnectionStatus("error");
+    });
+
+    // 5. 组件卸载时清理资源
+    return () => {
+      console.log("Destroying PeerJS instance.");
+      peer.destroy();
+    };
+  }, [excavatorId]);
 
   if (!excavator) {
     return (
@@ -101,6 +150,23 @@ export default function RemoteControlPage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Badge
+              variant={
+                connectionStatus === "connected"
+                  ? "default"
+                  : connectionStatus === "connecting"
+                  ? "secondary"
+                  : "destructive"
+              }
+            >
+              {connectionStatus === "connected"
+                ? "已连接"
+                : connectionStatus === "connecting"
+                ? "连接中..."
+                : connectionStatus === "error"
+                ? "连接错误"
+                : "未连接"}
+            </Badge>
             <Badge
               variant={
                 excavator.status === "normal" ? "default" : "destructive"
@@ -221,24 +287,6 @@ export default function RemoteControlPage() {
           />
         </CardContent>
       </Card>
-
-      {/* 控制按钮区域 */}
-      {/* <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-50">
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            className="bg-black/80 border-gray-600 text-white hover:bg-white/10"
-          >
-            启动引擎
-          </Button>
-          <Button
-            variant="destructive"
-            className="bg-red-600/80 hover:bg-red-600"
-          >
-            紧急停止
-          </Button>
-        </div>
-      </div> */}
     </div>
   );
 }
