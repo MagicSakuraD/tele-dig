@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, VideoOff, Maximize2, RotateCcw } from "lucide-react";
 import { Peer, DataConnection } from "peerjs";
 
+import { useExcavatorGamepad } from "@/hooks/useExcavatorGamepad";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,8 @@ export default function RemoteControlPage() {
   // 查找对应的挖掘机
   const excavator = excavators.find((ex) => ex.id === excavatorId);
 
+  // 挖掘机控制
+  const controls = useExcavatorGamepad();
   // 状态管理
   const [signalStrength, setSignalStrength] = React.useState(85);
   const [packetLoss, setPacketLoss] = React.useState(0.1);
@@ -31,6 +34,13 @@ export default function RemoteControlPage() {
 
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
+
+  // 当控制器数据变化时，通过peerjs发送
+  useEffect(() => {
+    if (connRef.current && connRef.current.open) {
+      connRef.current.send(controls);
+    }
+  }, [controls]);
 
   //建立peerjs webrtc连接
   useEffect(() => {
@@ -114,17 +124,12 @@ export default function RemoteControlPage() {
   return (
     <div className="min-h-screen relative overflow-hidden">
       {/* 主视图 - 前视图 */}
-      <div className="absolute inset-0 bg-gradient-to-br">
-        <div className="w-full h-full flex items-center justify-center">
-          <div className="text-center">
-            <VideoOff className="h-24 w-24 mx-auto mb-4 opacity-50" />
-            <h2 className="text-2xl font-bold mb-2">前视图</h2>
-            <p className="text-gray-400">WebRTC 视频流 - {excavator.number}</p>
-            <div className="mt-4 text-sm text-gray-500">
-              分辨率: 1920x1080 | 帧率: 30fps | 编码: H.264
-            </div>
-          </div>
-        </div>
+      <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
+        <img
+          src="http://192.168.2.104:8080/stream?topic=/front_camera"
+          alt="Front Camera Stream"
+          className="w-full h-full object-contain"
+        />
       </div>
 
       {/* 顶部控制栏 */}
@@ -199,8 +204,12 @@ export default function RemoteControlPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-2">
-          <div className="w-full h-full  rounded flex items-center justify-center">
-            <VideoOff className="h-8 w-8 text-gray-500" />
+          <div className="w-full h-full rounded flex items-center justify-center bg-black">
+            <img
+              src="http://192.168.2.104:8080/stream?topic=/left_camera"
+              alt="Left Camera Stream"
+              className="w-full h-full object-contain"
+            />
           </div>
         </CardContent>
       </Card>

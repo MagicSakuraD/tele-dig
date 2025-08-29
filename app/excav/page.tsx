@@ -11,6 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { VehicleIdForm } from "@/components/vehicle-id-form";
 import { VideoStreamGrid } from "@/components/video-stream-grid";
+import { ExcavatorControls } from "@/hooks/useExcavatorGamepad";
+import { useRosPublisher, RosStatus } from "@/hooks/useRosPublisher";
 
 export default function ExcavPage() {
   const router = useRouter();
@@ -18,7 +20,11 @@ export default function ExcavPage() {
   const [peerConnectionStatus, setPeerConnectionStatus] = React.useState<
     "disconnected" | "connecting" | "connected" | "error"
   >("disconnected");
-  const [lastMessage, setLastMessage] = React.useState<string>("");
+  const [lastMessage, setLastMessage] =
+    React.useState<ExcavatorControls | null>(null);
+
+  // ROS Publisher Hook
+  const rosStatus = useRosPublisher("ws://localhost:9090", lastMessage);
 
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
@@ -51,10 +57,8 @@ export default function ExcavPage() {
       setPeerConnectionStatus("connected");
 
       conn.on("data", (data) => {
-        console.log(`Received message: ${data}`);
-        setLastMessage(data as string); // 保存收到的消息
-        // 收到消息后可以回复
-        conn.send("Message received by excavator!");
+        console.log("Received data:", data);
+        setLastMessage(data as ExcavatorControls); // 保存收到的消息
       });
 
       conn.on("open", () => {
@@ -64,7 +68,7 @@ export default function ExcavPage() {
       conn.on("close", () => {
         console.log("Connection closed.");
         setPeerConnectionStatus("disconnected");
-        setLastMessage("");
+        setLastMessage(null);
       });
 
       conn.on("error", (err) => {
@@ -122,6 +126,32 @@ export default function ExcavPage() {
     }
   };
 
+  const getRosStatusColor = (status: RosStatus) => {
+    switch (status) {
+      case "connected":
+        return "text-green-600 bg-green-100";
+      case "connecting":
+        return "text-yellow-600 bg-yellow-100";
+      case "error":
+        return "text-red-600 bg-red-100";
+      default:
+        return "text-gray-600 bg-gray-100";
+    }
+  };
+
+  const getRosStatusText = (status: RosStatus) => {
+    switch (status) {
+      case "connected":
+        return "已连接";
+      case "connecting":
+        return "连接中...";
+      case "error":
+        return "连接错误";
+      default:
+        return "未连接";
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       {/* ... UI部分保持不变 ... */}
@@ -143,7 +173,7 @@ export default function ExcavPage() {
             {vehicleId && (
               <div className="flex items-center gap-4">
                 <Badge variant="outline" className="text-sm font-mono">
-                  ID: {vehicleId}excavator
+                  ID: excav{vehicleId}
                 </Badge>
                 <Badge
                   className={`text-xs ${getConnectionStatusColor(
@@ -157,7 +187,17 @@ export default function ExcavPage() {
                   ) : (
                     <WifiOff className="h-3 w-3 mr-1" />
                   )}
-                  {getConnectionStatusText(peerConnectionStatus)}
+                  Peer: {getConnectionStatusText(peerConnectionStatus)}
+                </Badge>
+                <Badge className={`text-xs ${getRosStatusColor(rosStatus)}`}>
+                  {rosStatus === "connecting" ? (
+                    <Wifi className="h-3 w-3 mr-1 animate-pulse" />
+                  ) : rosStatus === "connected" ? (
+                    <Wifi className="h-3 w-3 mr-1" />
+                  ) : (
+                    <WifiOff className="h-3 w-3 mr-1" />
+                  )}
+                  ROS: {getRosStatusText(rosStatus)}
                 </Badge>
                 <Button variant="outline" size="sm" onClick={handleDisconnect}>
                   断开连接
@@ -208,9 +248,9 @@ export default function ExcavPage() {
                     </div>
                   </div>
                   <div className="text-center">
-                    <div className="text-lg font-semibold text-green-600">
+                    <div className="text-sm font-semibold text-green-600 whitespace-pre-wrap">
                       {lastMessage
-                        ? `收到消息: "${lastMessage}"`
+                        ? JSON.stringify(lastMessage, null, 2)
                         : "等待消息..."}
                     </div>
                     <div className="text-sm text-muted-foreground">
