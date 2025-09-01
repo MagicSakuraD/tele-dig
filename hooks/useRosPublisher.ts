@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import ROSLIB from "roslib";
 import { ExcavatorControls } from "./useExcavatorGamepad";
 
@@ -17,19 +17,16 @@ const JOINT_NAMES = [
 ];
 
 /**
- * A custom hook to connect to ROS and publish excavator control commands.
- * @param url The URL of the rosbridge server (e.g., "ws://localhost:9090").
+ * A custom hook to publish excavator control commands using an existing ROS connection.
+ * @param ros The active ROSLIB.Ros instance.
  * @param controls The excavator control state, or null if not available.
  * @param topicName The name of the topic to publish to.
- * @returns The current status of the ROS connection.
  */
 export const useRosPublisher = (
-  url: string,
+  ros: ROSLIB.Ros | null,
   controls: ExcavatorControls | null,
   topicName: string = "/pc2000_joint_command"
-): RosStatus => {
-  const [status, setStatus] = useState<RosStatus>("disconnected");
-  const rosRef = useRef<ROSLIB.Ros | null>(null);
+) => {
   const publisherRef = useRef<ROSLIB.Topic | null>(null);
   const controlsRef = useRef<ExcavatorControls | null>(controls);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -40,78 +37,55 @@ export const useRosPublisher = (
   }, [controls]);
 
   useEffect(() => {
-    if (!url) {
-      setStatus("disconnected");
+    if (!ros || !ros.isConnected) {
+      // If no ROS connection, clear any existing interval and do nothing.
+      if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
 
-    // 1. Initialize ROS connection
-    const ros = new ROSLIB.Ros({ url });
-    rosRef.current = ros;
-
-    ros.on("connection", () => {
-      console.log("Connected to ROS bridge.");
-      setStatus("connected");
-
-      // 2. Create a publisher
-      const publisher = new ROSLIB.Topic({
+    // 1. Create a publisher if it doesn't exist
+    if (!publisherRef.current) {
+      publisherRef.current = new ROSLIB.Topic({
         ros,
         name: topicName,
         messageType: "sensor_msgs/msg/JointState",
       });
-      publisherRef.current = publisher;
+    }
+    const publisher = publisherRef.current;
 
-      // 3. Start publishing loop
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(() => {
-        const currentControls = controlsRef.current;
-        if (!currentControls) return;
+    // 2. Start publishing loop
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      const currentControls = controlsRef.current;
+      if (!currentControls) return;
 
-        // 4. Map controls to JointState message
-        const jointStateMsg = new ROSLIB.Message({
-          header: {
-            stamp: {
-              sec: Math.floor(Date.now() / 1000),
-              nanosec: (Date.now() % 1000) * 1e6,
-            },
-            frame_id: "",
+      // 3. Map controls to JointState message
+      const jointStateMsg = new ROSLIB.Message({
+        header: {
+          stamp: {
+            sec: Math.floor(Date.now() / 1000),
+            nanosec: (Date.now() % 1000) * 1e6,
           },
-          name: JOINT_NAMES,
-          position: [
-            -currentControls.bucket * 3.0, // bucket_linear
-            -currentControls.boom * 3.0, // arm_linear (大臂)
-            -currentControls.stick * 3.0, // boom_linear (小臂)
-            currentControls.swing * Math.PI, // body_rotate
-          ],
-          velocity: [0.0, 0.0, 0.0, 0.0],
-          effort: [0.0, 0.0, 0.0, 0.0],
-        });
+          frame_id: "",
+        },
+        name: JOINT_NAMES,
+        position: [
+          -currentControls.bucket * 3.0, // bucket_linear
+          -currentControls.boom * 3.0, // arm_linear (大臂)
+          -currentControls.stick * 3.0, // boom_linear (小臂)
+          currentControls.swing * Math.PI, // body_rotate
+        ],
+        velocity: [0.0, 0.0, 0.0, 0.0],
+        effort: [0.0, 0.0, 0.0, 0.0],
+      });
 
-        publisher.publish(jointStateMsg);
-      }, PUBLISH_INTERVAL);
-    });
+      publisher.publish(jointStateMsg);
+    }, PUBLISH_INTERVAL);
 
-    ros.on("error", (error: Error) => {
-      console.error("Error connecting to ROS bridge:", error);
-      setStatus("error");
-    });
-
-    ros.on("close", () => {
-      console.log("Disconnected from ROS bridge.");
-      setStatus("disconnected");
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    });
-
-    setStatus("connecting");
-
-    // 5. Cleanup on component unmount
+    // 4. Cleanup on component unmount or when ros connection changes
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      if (rosRef.current) {
-        rosRef.current.close();
-      }
+      // We don't destroy the publisher here as the ROS instance is managed outside
     };
-  }, [url, topicName]);
-
-  return status;
+  }, [ros, topicName]);
 };
