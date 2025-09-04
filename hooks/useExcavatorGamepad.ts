@@ -105,7 +105,7 @@ export const useExcavatorGamepad = () => {
           : 0,
         // Y轴向前是伸(-1)，向后是收(1)，所以反转值
         stick: leftGamepad
-          ? normalizeAxisValue(leftGamepad.axes[MAPPING.STICK_AXIS]) * -1
+          ? normalizeAxisValue(leftGamepad.axes[MAPPING.STICK_AXIS])
           : 0,
         leftTrack: leftGamepad
           ? normalizeTrackValue(leftGamepad.axes[MAPPING.LEFT_TRACK_AXIS])
@@ -117,7 +117,7 @@ export const useExcavatorGamepad = () => {
           : 0,
         // Y轴向前是降(-1)，向后是提(1)，所以反转值
         boom: rightGamepad
-          ? normalizeAxisValue(rightGamepad.axes[MAPPING.BOOM_AXIS]) * -1
+          ? normalizeAxisValue(rightGamepad.axes[MAPPING.BOOM_AXIS])
           : 0,
         rightTrack: rightGamepad
           ? normalizeTrackValue(rightGamepad.axes[MAPPING.RIGHT_TRACK_AXIS])

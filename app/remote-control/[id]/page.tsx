@@ -48,6 +48,10 @@ export default function RemoteControlPage() {
   const callRef = useRef<MediaConnection | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // 在现有的状态管理部分添加
+  const [mediaLatency, setMediaLatency] = React.useState<number | null>(null);
+  const [mediaJitter, setMediaJitter] = React.useState<number | null>(null);
+
   // 当控制器数据变化时，通过peerjs发送
   useEffect(() => {
     if (connRef.current && connRef.current.open && controls) {
@@ -293,14 +297,18 @@ export default function RemoteControlPage() {
     };
   }, [excavatorId]);
 
-  // 延迟和网络状态监控
+  //  替换现有的延迟和网络状态监控 useEffect
   useEffect(() => {
-    if (connectionStatus === "connected" && connRef.current) {
+    if (
+      connectionStatus === "connected" &&
+      (connRef.current || callRef.current)
+    ) {
       const monitorStats = async () => {
         try {
-          const peerConnection = connRef.current
-            ?.peerConnection as RTCPeerConnection;
-          if (peerConnection) {
+          // 监控 DataChannel 延迟
+          if (connRef.current?.peerConnection) {
+            const peerConnection = connRef.current
+              .peerConnection as RTCPeerConnection;
             const stats = await peerConnection.getStats();
             stats.forEach((report) => {
               if (
@@ -308,6 +316,24 @@ export default function RemoteControlPage() {
                 report.currentRoundTripTime
               ) {
                 setLatency(Math.round(report.currentRoundTripTime * 1000));
+              }
+            });
+          }
+
+          // 监控 MediaChannel 延迟
+          if (callRef.current?.peerConnection) {
+            const peerConnection = callRef.current
+              .peerConnection as RTCPeerConnection;
+            const stats = await peerConnection.getStats();
+            stats.forEach((report) => {
+              if (report.type === "inbound-rtp" && report.kind === "video") {
+                // 视频流的入站 RTP 统计
+                if (report.roundTripTime) {
+                  setMediaLatency(Math.round(report.roundTripTime * 1000)); // 单位：毫秒
+                }
+                if (report.jitter) {
+                  setMediaJitter(report.jitter * 1000); // 抖动，单位：毫秒
+                }
               }
             });
           }
@@ -319,7 +345,7 @@ export default function RemoteControlPage() {
       const interval = setInterval(monitorStats, 1000);
       return () => clearInterval(interval);
     }
-  }, [connectionStatus]);
+  }, [connectionStatus, videoConnectionStatus]);
 
   const getConnectionStatusText = (status: string) => {
     switch (status) {
@@ -367,7 +393,7 @@ export default function RemoteControlPage() {
           autoPlay
           muted
           playsInline
-          className="w-full h-full object-contain"
+          className="w-full h-4/5 object-contain"
           style={{
             display: videoConnectionStatus === "connected" ? "block" : "none",
           }}
@@ -466,7 +492,7 @@ export default function RemoteControlPage() {
       </div>
 
       {/* 左视图浮窗 */}
-      <Card className="absolute top-24 left-4 w-80 z-40 h-[230px]">
+      {/* <Card className="absolute top-24 left-4 w-80 z-40 h-[230px]">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center justify-between">
             左侧摄像头
@@ -487,10 +513,10 @@ export default function RemoteControlPage() {
             <span className="ml-2 text-gray-500 text-sm">暂无信号</span>
           </div>
         </CardContent>
-      </Card>
+      </Card> */}
 
       {/* 右视图浮窗 */}
-      <Card className="absolute top-24 right-4 w-80 z-40 h-[230px]">
+      {/* <Card className="absolute top-24 right-4 w-80 z-40 h-[230px]">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center justify-between">
             右侧摄像头
@@ -511,10 +537,10 @@ export default function RemoteControlPage() {
             <span className="ml-2 text-gray-500 text-sm">暂无信号</span>
           </div>
         </CardContent>
-      </Card>
+      </Card> */}
 
       {/* 后视图浮窗 */}
-      <Card className="absolute bottom-20 left-1/2 transform -translate-x-1/2 w-80 h-48 z-40 border-white/20">
+      {/* <Card className="absolute bottom-20 left-1/2 transform -translate-x-1/2 w-80 h-48 z-40 border-white/20">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center justify-between">
             后视摄像头
@@ -535,7 +561,7 @@ export default function RemoteControlPage() {
             <span className="ml-2 text-gray-500 text-sm">暂无信号</span>
           </div>
         </CardContent>
-      </Card>
+      </Card> */}
 
       {/* 3D姿态监控浮窗 */}
       <div className="absolute bottom-4 left-4 z-50">
@@ -572,6 +598,13 @@ export default function RemoteControlPage() {
             <div className="text-xs">任务: {excavator.taskName}</div>
             <div className="text-xs">控制延迟: {latency}ms</div>
           </div>
+
+          {mediaLatency !== null && (
+            <div className="text-xs">视频延迟: {mediaLatency}ms</div>
+          )}
+          {mediaJitter !== null && (
+            <div className="text-xs">视频抖动: {mediaJitter.toFixed(2)}ms</div>
+          )}
 
           <div className="pt-2">
             <SignalStrength

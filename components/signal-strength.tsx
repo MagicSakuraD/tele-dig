@@ -70,10 +70,10 @@ export function SignalStrength({
             <div className="text-xs text-muted-foreground">
               延迟:{" "}
               <span className="font-semibold text-foreground">{latency}ms</span>{" "}
-              | 丢包率:{" "}
+              {/* | 丢包率:{" "}
               <span className="font-semibold text-foreground">
                 {packetLoss}%
-              </span>
+              </span> */}
             </div>
           </div>
         </div>

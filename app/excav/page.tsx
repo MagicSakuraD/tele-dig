@@ -26,10 +26,16 @@ export default function ExcavPage() {
 
   const rosRef = useRef<ROSLIB.Ros | null>(null);
   const [rosStatus, setRosStatus] = React.useState<RosStatus>("disconnected");
-  const videoCanvasRef = useRef<HTMLCanvasElement>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const [videoStreamStatus, setVideoStreamStatus] = React.useState<
+    "disconnected" | "connecting" | "connected" | "error"
+  >("disconnected");
 
-  // ROS Connection and Publisher
+  const videoCanvasRef = useRef<HTMLCanvasElement>(null);
+  const videoElementRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const streamUrlRef = useRef<string>("");
+
+  // ROS Connection (简化版，只用于控制指令发布)
   useEffect(() => {
     const ros = new ROSLIB.Ros({ url: "ws://localhost:9090" });
 
@@ -53,88 +59,144 @@ export default function ExcavPage() {
     };
   }, []);
 
+  // 视频流处理 - 使用web_video_server
   useEffect(() => {
-    if (rosStatus !== "connected" || !videoCanvasRef.current) return;
+    if (!vehicleId || !videoCanvasRef.current) return;
 
     const canvas = videoCanvasRef.current;
     const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      console.error("Failed to get 2D context for canvas");
+    const videoElement = videoElementRef.current;
+
+    if (!ctx || !videoElement) {
+      console.error("Failed to get canvas context or video element");
       return;
     }
 
-    // 初始化 canvas 尺寸
+    // 设置canvas尺寸
     canvas.width = 1280;
     canvas.height = 720;
 
-    const listener = new ROSLIB.Topic({
-      ros: rosRef.current!,
-      name: "/front_camera",
-      messageType: "sensor_msgs/msg/Image", // ROS2 格式
-    });
+    setVideoStreamStatus("connecting");
 
-    listener.subscribe((message: any) => {
-      if (!message.data || !message.width || !message.height) {
-        console.warn("Invalid image message: missing data, width, or height");
-        return;
+    // 方案1: 使用MJPEG流 (推荐)
+    const mjpegUrl = `http://localhost:8080/stream?topic=/front_camera&type=mjpeg&quality=90&width=1280&height=720`;
+
+    // 方案2: 使用VP8/WebM流 (如果支持)
+    // const webmUrl = `http://localhost:8080/stream?topic=/front_camera&type=vp8&quality=90&width=1280&height=720`;
+
+    streamUrlRef.current = mjpegUrl;
+
+    // 创建图像元素来处理MJPEG流
+    const img = new Image();
+    img.crossOrigin = "anonymous"; // 处理跨域问题
+
+    let animationId: number;
+    let lastFrameTime = 0;
+    const TARGET_FPS = 30;
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+
+    // 渲染循环
+    function renderLoop() {
+      const now = performance.now();
+      if (
+        now - lastFrameTime >= FRAME_INTERVAL &&
+        img.complete &&
+        img.naturalWidth > 0
+      ) {
+        lastFrameTime = now;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       }
+      animationId = requestAnimationFrame(renderLoop);
+    }
 
-      // 更新 canvas 尺寸
-      if (canvas.width !== message.width) canvas.width = message.width;
-      if (canvas.height !== message.height) canvas.height = message.height;
+    img.onload = () => {
+      console.log("Video stream loaded successfully");
+      setVideoStreamStatus("connected");
 
-      // 解码 Base64 字符串为 Uint8Array
-      let rawData: Uint8Array;
-      try {
-        const binaryString = atob(message.data); // 解码 Base64
-        rawData = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          rawData[i] = binaryString.charCodeAt(i); // 转换为字节
+      // 启动渲染循环
+      renderLoop();
+
+      // 捕获canvas流
+      if ("captureStream" in canvas) {
+        try {
+          mediaStreamRef.current = (canvas as any).captureStream(TARGET_FPS);
+          console.log(`Canvas stream captured at ${TARGET_FPS}fps`);
+        } catch (error) {
+          console.error("Failed to capture canvas stream:", error);
         }
-        console.log("Decoded data length:", rawData.length); // 验证长度，应为 1280*720*3 = 3686400
-      } catch (error) {
-        console.error("Base64 decode error:", error);
-        return;
       }
+    };
 
-      const imageData = ctx.createImageData(message.width, message.height);
+    img.onerror = (err) => {
+      console.error("Error loading video stream:", err);
+      setVideoStreamStatus("error");
 
-      if (message.encoding === "rgb8") {
-        // rgb8 格式，直接映射到 RGBA
-        for (let i = 0, j = 0; i < rawData.length; i += 3, j += 4) {
-          imageData.data[j] = rawData[i]; // R
-          imageData.data[j + 1] = rawData[i + 1]; // G
-          imageData.data[j + 2] = rawData[i + 2]; // B
-          imageData.data[j + 3] = 255; // Alpha
+      // 尝试重新连接
+      setTimeout(() => {
+        if (streamUrlRef.current) {
+          console.log("Attempting to reconnect video stream...");
+          img.src = streamUrlRef.current + "?t=" + Date.now(); // 添加时间戳避免缓存
         }
-      } else if (message.encoding === "bgr8") {
-        // bgr8 格式，反转通道
-        for (let i = 0, j = 0; i < rawData.length; i += 3, j += 4) {
-          imageData.data[j] = rawData[i + 2]; // R
-          imageData.data[j + 1] = rawData[i + 1]; // G
-          imageData.data[j + 2] = rawData[i]; // B
-          imageData.data[j + 3] = 255; // Alpha
-        }
-      } else {
-        console.warn("Unsupported encoding:", message.encoding);
-        return;
-      }
+      }, 3000);
+    };
 
-      // 使用 requestAnimationFrame 优化渲染
-      requestAnimationFrame(() => {
-        ctx.putImageData(imageData, 0, 0);
-        if (!mediaStreamRef.current && "captureStream" in canvas) {
-          mediaStreamRef.current = (canvas as any).captureStream(24); // 降低帧率优化性能
-          console.log("Canvas stream captured at 24fps");
-        }
-      });
-    });
+    // 设置图像源
+    img.src = mjpegUrl;
 
     return () => {
-      console.log("Unsubscribing from /front_camera");
-      listener.unsubscribe();
+      if (animationId) {
+        cancelAnimationFrame(animationId);
+      }
+      img.src = "";
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
     };
-  }, [rosStatus, vehicleId]);
+  }, [vehicleId]);
+
+  // 备用方案：使用video元素处理流
+  const initVideoElement = async () => {
+    if (!videoElementRef.current || !vehicleId) return;
+
+    const video = videoElementRef.current;
+    const canvas = videoCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+
+    if (!canvas || !ctx) return;
+
+    try {
+      // 尝试使用video元素加载流
+      const streamUrl = `http://localhost:8080/stream?topic=/front_camera&type=mjpeg`;
+      video.src = streamUrl;
+      video.crossOrigin = "anonymous";
+
+      await video.play();
+
+      // 从video元素绘制到canvas
+      const drawFrame = () => {
+        if (video.readyState >= 2) {
+          canvas.width = video.videoWidth || 1280;
+          canvas.height = video.videoHeight || 720;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+        requestAnimationFrame(drawFrame);
+      };
+
+      video.addEventListener("loadeddata", () => {
+        setVideoStreamStatus("connected");
+        drawFrame();
+
+        // 捕获canvas流
+        if ("captureStream" in canvas) {
+          mediaStreamRef.current = (canvas as any).captureStream(30);
+        }
+      });
+    } catch (error) {
+      console.error("Video element approach failed:", error);
+      setVideoStreamStatus("error");
+    }
+  };
 
   // ROS Control Publisher
   useRosPublisher(rosRef.current, lastMessage);
@@ -148,7 +210,6 @@ export default function ExcavPage() {
 
     setPeerConnectionStatus("connecting");
 
-    // 创建Peer实例
     const peer = new Peer("excav" + vehicleId, {
       host: "cyberc3-cloud-server.sjtu.edu.cn",
       port: 443,
@@ -158,13 +219,11 @@ export default function ExcavPage() {
     });
     peerRef.current = peer;
 
-    // 监听与信令服务器的连接
     peer.on("open", (id) => {
       console.log("Excavator PeerJS is open. My ID is:", id);
-      setPeerConnectionStatus("disconnected"); // 准备好接收连接
+      setPeerConnectionStatus("disconnected");
     });
 
-    // 监听来自操作端的数据连接请求
     peer.on("connection", (conn) => {
       console.log("Received data connection from operator:", conn.peer);
       connRef.current = conn;
@@ -177,27 +236,32 @@ export default function ExcavPage() {
       conn.on("open", () => {
         console.log("Data connection is open.");
 
-        // 数据连接建立后，挖掘机端主动发起视频通话
-        if (mediaStreamRef.current) {
-          console.log("Initiating video call to operator...");
-          const call = peer.call(conn.peer, mediaStreamRef.current);
-          callRef.current = call;
+        // 等待媒体流准备好后发起视频通话
+        const initCall = () => {
+          if (mediaStreamRef.current) {
+            console.log("Initiating video call to operator...");
+            const call = peer.call(conn.peer, mediaStreamRef.current);
+            callRef.current = call;
 
-          call.on("stream", (remoteStream) => {
-            console.log("Received remote stream (not needed for excavator)");
-          });
+            call.on("stream", (remoteStream) => {
+              console.log("Received remote stream (not needed for excavator)");
+            });
 
-          call.on("close", () => {
-            console.log("Video call closed");
-            callRef.current = null;
-          });
+            call.on("close", () => {
+              console.log("Video call closed");
+              callRef.current = null;
+            });
 
-          call.on("error", (err) => {
-            console.error("Video call error:", err);
-          });
-        } else {
-          console.warn("No media stream available for video call");
-        }
+            call.on("error", (err) => {
+              console.error("Video call error:", err);
+            });
+          } else {
+            // 如果媒体流还没准备好，等待一下再试
+            setTimeout(initCall, 1000);
+          }
+        };
+
+        initCall();
       });
 
       conn.on("close", () => {
@@ -230,31 +294,6 @@ export default function ExcavPage() {
     };
   }, [vehicleId]);
 
-  // 监听mediaStream变化，自动发起视频通话
-  useEffect(() => {
-    if (mediaStreamRef.current && connRef.current && peerRef.current) {
-      console.log("Media stream ready, initiating video call...");
-      const call = peerRef.current.call(
-        connRef.current.peer,
-        mediaStreamRef.current
-      );
-      callRef.current = call;
-
-      call.on("stream", (remoteStream) => {
-        console.log("Received remote stream");
-      });
-
-      call.on("close", () => {
-        console.log("Video call closed");
-        callRef.current = null;
-      });
-
-      call.on("error", (err) => {
-        console.error("Video call error:", err);
-      });
-    }
-  }, [mediaStreamRef.current, connRef.current]);
-
   const handleVehicleIdSubmit = (id: string) => {
     setVehicleId(id);
   };
@@ -267,6 +306,7 @@ export default function ExcavPage() {
     peerRef.current?.destroy();
     setVehicleId(null);
     setPeerConnectionStatus("disconnected");
+    setVideoStreamStatus("disconnected");
   };
 
   const getConnectionStatusColor = (status: string) => {
@@ -323,6 +363,15 @@ export default function ExcavPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* 隐藏的video元素，作为备用方案 */}
+      <video
+        ref={videoElementRef}
+        style={{ display: "none" }}
+        muted
+        playsInline
+        autoPlay
+      />
+
       <div className="bg-white border-b shadow-sm">
         <div className="mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -333,7 +382,7 @@ export default function ExcavPage() {
               <div>
                 <h1 className="text-xl font-semibold">挖掘机车端系统</h1>
                 <p className="text-sm text-muted-foreground">
-                  Vehicle Terminal System
+                  Vehicle Terminal System (using web_video_server)
                 </p>
               </div>
             </div>
@@ -367,6 +416,20 @@ export default function ExcavPage() {
                   )}
                   ROS: {getRosStatusText(rosStatus)}
                 </Badge>
+                <Badge
+                  className={`text-xs ${getConnectionStatusColor(
+                    videoStreamStatus
+                  )}`}
+                >
+                  {videoStreamStatus === "connecting" ? (
+                    <Wifi className="h-3 w-3 mr-1 animate-pulse" />
+                  ) : videoStreamStatus === "connected" ? (
+                    <Wifi className="h-3 w-3 mr-1" />
+                  ) : (
+                    <WifiOff className="h-3 w-3 mr-1" />
+                  )}
+                  Video: {getConnectionStatusText(videoStreamStatus)}
+                </Badge>
                 <Button variant="outline" size="sm" onClick={handleDisconnect}>
                   断开连接
                 </Button>
@@ -394,7 +457,7 @@ export default function ExcavPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="text-center">
                     <div className="text-2xl font-mono font-bold text-blue-600 mb-1">
                       excav{vehicleId}
@@ -425,6 +488,18 @@ export default function ExcavPage() {
                       ROS连接状态
                     </div>
                   </div>
+                  <div className="text-center">
+                    <Badge
+                      className={`text-sm ${getConnectionStatusColor(
+                        videoStreamStatus
+                      )}`}
+                    >
+                      {getConnectionStatusText(videoStreamStatus)}
+                    </Badge>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      视频流状态
+                    </div>
+                  </div>
                 </div>
 
                 {lastMessage && (
@@ -445,14 +520,76 @@ export default function ExcavPage() {
                 <CardTitle className="text-lg">摄像头视频流</CardTitle>
               </CardHeader>
               <CardContent>
-                <canvas
-                  ref={videoCanvasRef}
-                  className="w-full aspect-video  rounded-lg"
-                  style={{ maxWidth: "100%", height: "auto" }}
-                />
+                <div className="relative">
+                  <canvas
+                    ref={videoCanvasRef}
+                    className="w-full aspect-video rounded-lg border"
+                    style={{ maxWidth: "100%", height: "auto" }}
+                  />
+                  {videoStreamStatus === "connecting" && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg">
+                      <div className="text-center">
+                        <Wifi className="h-8 w-8 mx-auto mb-2 animate-pulse text-blue-600" />
+                        <div className="text-sm text-gray-600">
+                          连接视频流中...
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {videoStreamStatus === "error" && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-red-50 rounded-lg">
+                      <div className="text-center">
+                        <WifiOff className="h-8 w-8 mx-auto mb-2 text-red-600" />
+                        <div className="text-sm text-red-600">
+                          视频流连接失败
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          请确保web_video_server正在运行
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div className="mt-2 text-sm text-muted-foreground text-center">
-                  ROS话题: /front_camera | 状态:{" "}
-                  {rosStatus === "connected" ? "接收中" : "等待连接"}
+                  <div>视频源: {streamUrlRef.current}</div>
+                  <div>状态: {getConnectionStatusText(videoStreamStatus)}</div>
+                  <div className="text-xs mt-1">
+                    Canvas流: {mediaStreamRef.current ? "已捕获" : "未捕获"}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 调试信息 */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">调试信息</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2 text-sm">
+                  <div>
+                    <strong>启动web_video_server命令:</strong>
+                    <code className="ml-2 p-1 bg-gray-100 rounded">
+                      ros2 run web_video_server web_video_server
+                    </code>
+                  </div>
+                  <div>
+                    <strong>流查看器URL:</strong>
+                    <a
+                      href={`http://localhost:8080/stream_viewer?topic=/front_camera`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-2 text-blue-600 hover:underline"
+                    >
+                      http://localhost:8080/stream_viewer?topic=/front_camera
+                    </a>
+                  </div>
+                  <div>
+                    <strong>直接流URL:</strong>
+                    <code className="ml-2 p-1 bg-gray-100 rounded text-xs">
+                      {streamUrlRef.current}
+                    </code>
+                  </div>
                 </div>
               </CardContent>
             </Card>
